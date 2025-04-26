@@ -14,12 +14,10 @@ def create_user(db: Session, user: schemas.UserCreate):
     if existing_user:
         raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış.")
 
-    # E-posta kontrolü (isteğe bağlı, önerilir)
     existing_email = db.query(models.User).filter(models.User.email == user.email).first()
     if existing_email:
         raise HTTPException(status_code=400, detail="Bu e-posta adresi zaten kayıtlı.")
 
-    # Şifreyi hashleyip kullanıcıyı oluştur
     hashed_pw = hashlib.sha256(user.password.encode()).hexdigest()
     db_user = models.User(username=user.username, email=user.email, password=hashed_pw)
     db.add(db_user)
@@ -66,3 +64,17 @@ def get_completed_games_by_user(db: Session, username: str):
         ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
         models.Game.is_completed == True
     ).all()
+
+def match_or_create_game(db: Session, username: str, mode: str):
+    existing_match = db.query(models.PendingMatch).filter(models.PendingMatch.mode == mode).first()
+    if existing_match and existing_match.username != username:
+        # Eşleştir ve oyun oluştur
+        db.delete(existing_match)
+        db.commit()
+        return create_game(db, player1_username=existing_match.username, player2_username=username, mode=mode)
+    else:
+        # Kuyruğa ekle
+        pending = models.PendingMatch(username=username, mode=mode)
+        db.add(pending)
+        db.commit()
+        return None  # Beklemeye alındı

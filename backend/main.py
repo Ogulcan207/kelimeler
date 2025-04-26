@@ -40,7 +40,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/start-game")
 def start_game(game: schemas.GameCreate, db: Session = Depends(get_db)):
-    return crud.create_game(db, game)
+    return crud.match_or_create_game(db, game)
 
 @app.get("/active-games/{username}", response_model=List[schemas.GameOut])
 def active_games(username: str, db: Session = Depends(get_db)):
@@ -50,3 +50,21 @@ def active_games(username: str, db: Session = Depends(get_db)):
 def completed_games(username: str, db: Session = Depends(get_db)):
     games = crud.get_completed_games_by_user(db, username)
     return games
+
+@app.get("/check-match")
+def check_match(username: str, mode: str, db: Session = Depends(get_db)):
+    user = crud.get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+    # Kullanıcının aktif oyunu var mı kontrol et
+    active_game = db.query(models.Game).filter(
+        ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)) &
+        (models.Game.mode == mode) &
+        (models.Game.player1_score == 0)  # Başlamış ama henüz skor alınmamış gibi kontrol
+    ).first()
+
+    if active_game:
+        return {"game_id": active_game.id}
+
+    return {"game_id": None}

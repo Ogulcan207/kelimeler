@@ -26,7 +26,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> startGame(BuildContext context, String mode) async {
     final response = await http.post(
-      Uri.parse('http://10.0.2.2:8000/start-game'),
+      Uri.parse('http://192.168.1.103:8001/start-game'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'player1_username': widget.username,
