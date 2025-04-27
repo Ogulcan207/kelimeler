@@ -31,35 +31,46 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
 
   Future<void> _loginUser() async {
-    final response = await http.post(
-      Uri.parse('http://192.168.1.103:8001/login'),
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: {
-        'username': _usernameController.text,
-        'password': _passwordController.text,
-      },
-    );
+    print("🛜 Giriş isteği gönderiliyor...");
 
-    if (!mounted) return;
-
-    if (response.statusCode == 200) {
-      final json = jsonDecode(response.body);
-      final username = json["username"];
-      final email = json["email"]; // Backend bunu döndürmeli! Eğer dönmüyorsa varsayılabilir veya DB'den alınabilir
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => HomePage(username: username, email: email),
-        ),
+    try {
+      final response = await http.post(
+        Uri.parse('http://192.168.1.103:8001/login'),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {
+          'username': _usernameController.text,
+          'password': _passwordController.text,
+        },
       );
-    } else {
-      final json = jsonDecode(response.body);
+      print("📥 Sunucudan cevap geldi, status code: ${response.statusCode}");
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        final username = json["username"];
+        final email = json["email"];
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => HomePage(username: username, email: email),
+          ),
+        );
+      } else {
+        final json = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata: ${json["detail"]}')),
+        );
+      }
+    } catch (e) {
+      print("❌ Bir hata oluştu: $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Hata: ${json["detail"]}')),
+        SnackBar(content: Text('Sunucuya bağlanılamadı')),
       );
     }
   }
+
 
   @override
   Widget build(BuildContext context) {

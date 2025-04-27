@@ -38,7 +38,7 @@ def create_game(db: Session, game_data: schemas.GameCreate):
     new_game = Game(
         player1_id=game_data.player1_id,
         player2_id=game_data.player2_id,
-        mode=GameMode(game_data.mode),
+        mode=game_data.mode.value,
         start_time=datetime.utcnow(),
         current_turn=1
     )
@@ -51,10 +51,27 @@ def get_active_games_by_user(db: Session, username: str):
     user = get_user_by_username(db, username)
     if not user:
         return []
-    return db.query(models.Game).filter(
+
+    games = db.query(models.Game).filter(
         ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
         models.Game.is_active == True
     ).all()
+
+    result = []
+    for game in games:
+        opponent_id = game.player2_id if game.player1_id == user.id else game.player1_id
+        opponent = db.query(models.User).filter(models.User.id == opponent_id).first()
+
+        result.append({
+            "id": game.id,
+            "mode": game.mode,
+            "player1_score": game.player1_score,
+            "player2_score": game.player2_score,
+            "current_turn": game.current_turn,
+            "opponent": opponent.username if opponent else "Bilinmiyor"
+        })
+
+    return result
 
 def get_completed_games_by_user(db: Session, username: str):
     user = get_user_by_username(db, username)
@@ -66,15 +83,61 @@ def get_completed_games_by_user(db: Session, username: str):
     ).all()
 
 def match_or_create_game(db: Session, username: str, mode: str):
-    existing_match = db.query(models.PendingMatch).filter(models.PendingMatch.mode == mode).first()
-    if existing_match and existing_match.username != username:
-        # Eşleştir ve oyun oluştur
-        db.delete(existing_match)
+    pending_match = db.query(models.PendingMatch).filter(models.PendingMatch.mode == mode).first()
+
+    if pending_match and pending_match.username != username:
+        # Eşleştir ve yeni oyun oluştur
+        player1 = get_user_by_username(db, pending_match.username)
+        player2 = get_user_by_username(db, username)
+
+        if not player1 or not player2:
+            raise HTTPException(status_code=404, detail="Oyuncu bulunamadı")
+
+        # Pending eşleşmeyi sil
+        db.delete(pending_match)
         db.commit()
-        return create_game(db, player1_username=existing_match.username, player2_username=username, mode=mode)
+
+        new_game = Game(
+            player1_id=player1.id,
+            player2_id=player2.id,
+            mode=mode,
+            start_time=datetime.utcnow(),
+            current_turn=1
+        )
+        db.add(new_game)
+        db.commit()
+        db.refresh(new_game)
+        return new_game
+
     else:
-        # Kuyruğa ekle
+        # Bekleyen yoksa yeni pending match oluştur
         pending = models.PendingMatch(username=username, mode=mode)
         db.add(pending)
         db.commit()
-        return None  # Beklemeye alındı
+        return None
+
+def get_active_games_by_user(db: Session, username: str):
+    user = get_user_by_username(db, username)
+    if not user:
+        return []
+
+    games = db.query(models.Game).filter(
+        ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
+        models.Game.is_active == True
+    ).all()
+
+    result = []
+    for game in games:
+        opponent_id = game.player2_id if game.player1_id == user.id else game.player1_id
+        opponent = db.query(models.User).filter(models.User.id == opponent_id).first()
+
+        result.append({
+            "id": game.id,
+            "mode": game.mode,
+            "player1_score": game.player1_score,
+            "player2_score": game.player2_score,
+            "current_turn": game.current_turn,
+            "opponent": opponent.username if opponent else "Bilinmiyor"
+        })
+
+    return result

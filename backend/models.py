@@ -37,3 +37,10 @@ class Game(Base):
 
     player1 = relationship("User", foreign_keys=[player1_id], back_populates="games_as_player1")
     player2 = relationship("User", foreign_keys=[player2_id], back_populates="games_as_player2")
+
+class PendingMatch(Base):
+    __tablename__ = "pending_matches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), nullable=False)
+    mode = Column(Enum(GameMode), nullable=False)

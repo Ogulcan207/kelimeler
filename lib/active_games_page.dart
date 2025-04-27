@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import 'game_screen.dart';
+import 'waiting_screen.dart';
+
 class ActiveGamesPage extends StatefulWidget {
   final String username;
 
@@ -22,7 +25,7 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
 
   Future<void> fetchActiveGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.103:8001/active-games/${widget.username}'),
+      Uri.parse('http://192.168.1.103:8001/get_active_games_by_user/${widget.username}'),
     );
 
     if (response.statusCode == 200) {
@@ -31,7 +34,7 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
       });
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Hata: Aktif oyunlar yüklenemedi')),
+        SnackBar(content: Text('Hata: Oyunlar yüklenemedi')),
       );
     }
   }
@@ -39,23 +42,56 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Aktif Oyunlar')),
-      body: ListView.builder(
+      appBar: AppBar(title: const Text('Aktif ve Bekleyen Oyunlar')),
+      body: activeGames.isEmpty
+          ? const Center(child: Text('Hiç aktif veya bekleyen oyun yok.'))
+          : ListView.builder(
         itemCount: activeGames.length,
         itemBuilder: (context, index) {
           final game = activeGames[index];
-          return Card(
-            child: ListTile(
-              title: Text("Rakip: ${game['opponent']}"),
-              subtitle: Text(
-                "Sen: ${game['your_score']} - Rakip: ${game['opponent_score']}\nSıra: ${game['turn'] == 1 ? 'Sen' : 'Rakip'}",
+          if (game['type'] == 'pending') {
+            return Card(
+              child: ListTile(
+                title: Text("Bekleyen Oyun (${game['mode']})"),
+                subtitle: const Text("Rakip aranıyor..."),
+                trailing: const Icon(Icons.hourglass_empty),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WaitingScreen(
+                        username: widget.username,
+                        mode: game['mode'],
+                      ),
+                    ),
+                  );
+                },
               ),
-              trailing: Text(game['mode']),
-              onTap: () {
-                // TODO: Oyuna yönlendir
-              },
-            ),
-          );
+            );
+          } else {
+            return Card(
+              child: ListTile(
+                title: Text("Rakip: ${game['opponent']}"),
+                subtitle: Text(
+                  "Sen: ${game['your_score']} - Rakip: ${game['opponent_score']}\n"
+                      "Sıra: ${game['turn'] == 1 ? 'Sen' : 'Rakip'}",
+                ),
+                trailing: Text(game['mode']),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => GameScreen(
+                        gameId: game['id'],
+                        mode: game['mode'],
+                        username: widget.username,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          }
         },
       ),
     );
