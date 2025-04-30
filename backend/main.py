@@ -140,5 +140,46 @@ def join_pending_game(
     db.delete(pending)  # Pending'i siliyoruz
     db.commit()
     db.refresh(new_game)
+    crud.create_game_grid(db, new_game.id)
 
     return {"message": "Oyun başarıyla oluşturuldu", "game_id": new_game.id}
+
+@app.post("/play-move")
+def play_move(move: schemas.PlayMove, db: Session = Depends(get_db)):
+    result = crud.play_move_logic(db, move)
+    if not result:
+        raise HTTPException(status_code=400, detail="Hamle geçersiz")
+    return result
+
+@app.get("/grid/{game_id}")
+def get_game_grid(game_id: int, db: Session = Depends(get_db)):
+    grid = db.execute(
+        """SELECT `row`, `col`, letter, special_type FROM game_grid
+           WHERE game_id = :game_id""",
+        {"game_id": game_id}
+    ).fetchall()
+
+    return [
+        {
+            "row": cell[0],
+            "col": cell[1],
+            "letter": cell[2],
+            "special_type": cell[3]
+        } for cell in grid
+    ]
+
+@app.get("/start-board/{game_id}")
+def start_board(game_id: int, db: Session = Depends(get_db)):
+    grid = db.query(models.GameGrid).filter(models.GameGrid.game_id == game_id).all()
+
+    board = [
+        {
+            "row": cell.row,
+            "col": cell.col,
+            "letter": cell.letter,
+            "special_type": cell.special_type,
+        }
+        for cell in grid
+    ]
+
+    return {"board": board}  # ✅ BU formatı döndür

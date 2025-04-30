@@ -59,7 +59,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
     });
 
     final response = await http.delete(
-      Uri.parse('http://192.168.1.103:8001/cancel-pending?username=${widget.username}'), // burada düzeltildi
+      Uri.parse('http://192.168.1.196:8001/cancel-pending?username=${widget.username}'), // burada düzeltildi
     );
 
     if (response.statusCode == 200) {

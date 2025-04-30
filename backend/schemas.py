@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from enum import Enum
 from datetime import datetime
+from typing import List
 
 class UserCreate(BaseModel):
     username: str
@@ -32,3 +33,13 @@ class GameOut(BaseModel):
 
     class Config:
         orm_mode = True
+
+class Position(BaseModel):
+    row: int
+    col: int
+
+class PlayMove(BaseModel):
+    game_id: int
+    username: str
+    word: str
+    positions: List[Position]

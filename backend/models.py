@@ -44,3 +44,13 @@ class PendingMatch(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), nullable=False)
     mode = Column(Enum(GameMode), nullable=False)
+
+class GameGrid(Base):
+    __tablename__ = "game_grid"
+
+    id = Column(Integer, primary_key=True, index=True)
+    game_id = Column(Integer, ForeignKey("games.id"), nullable=False)
+    row = Column(Integer, nullable=False)
+    col = Column(Integer, nullable=False)
+    letter = Column(String(1), nullable=True)  # Hamle yapılmadıysa boş olabilir
+    special_type = Column(String(50), nullable=True)  # bonus veya mayın tipi (örn: 'puan_bolme')

@@ -25,7 +25,7 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
 
   Future<void> fetchActiveGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.103:8001/get_active_games_by_user/${widget.username}'),
+      Uri.parse('http://192.168.1.196:8001/get_active_games_by_user/${widget.username}'),
     );
 
     if (response.statusCode == 200) {
@@ -42,7 +42,7 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Aktif ve Bekleyen Oyunlar')),
+      appBar: AppBar(title: const Text('Aktif Oyunlar')),
       body: activeGames.isEmpty
           ? const Center(child: Text('Hiç aktif veya bekleyen oyun yok.'))
           : ListView.builder(
@@ -76,7 +76,28 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
                   "Sen: ${game['your_score']} - Rakip: ${game['opponent_score']}\n"
                       "Sıra: ${game['turn'] == 1 ? 'Sen' : 'Rakip'}",
                 ),
-                trailing: Text(game['mode']),
+                trailing: game['is_started'] == false
+                    ? ElevatedButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => GameScreen(
+                          gameId: game['id'],
+                          mode: game['mode'],
+                          username: widget.username,
+                        ),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    textStyle: const TextStyle(fontSize: 12),
+                  ),
+                  child: const Text("Oyunu Başlat"),
+                )
+                    : Text(game['mode'], style: const TextStyle(fontWeight: FontWeight.bold)),
                 onTap: () {
                   Navigator.push(
                     context,
@@ -91,6 +112,7 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
                 },
               ),
             );
+
           }
         },
       ),
