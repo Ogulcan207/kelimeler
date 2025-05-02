@@ -164,7 +164,22 @@ class _HomePageState extends State<HomePage> {
                       Text("👤 Kullanıcı: ${widget.username}", style: const TextStyle(fontSize: 18)),
                       Text("📧 E-posta: ${widget.email}", style: const TextStyle(fontSize: 16)),
                       const SizedBox(height: 8),
-                      const Text("🎯 Başarı Yüzdesi: %0", style: TextStyle(fontSize: 16)),
+                      FutureBuilder<http.Response>(
+                        future: http.get(Uri.parse('http://192.168.1.102:8001/win-stats/${widget.username}')),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState != ConnectionState.done) {
+                            return const Text("🎯 Başarı Yüzdesi: %...", style: TextStyle(fontSize: 16));
+                          }
+                          if (snapshot.hasError || snapshot.data == null || snapshot.data!.statusCode != 200) {
+                            return const Text("🎯 Başarı Yüzdesi: %Hata", style: TextStyle(fontSize: 16));
+                          }
+                          final stats = jsonDecode(snapshot.data!.body);
+                          return Text(
+                            "🎯 Başarı Yüzdesi: %${stats['win_rate']} (${stats['wins']}/${stats['played']})",
+                            style: const TextStyle(fontSize: 16),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),

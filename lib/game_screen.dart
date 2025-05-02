@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
+import 'package:collection/collection.dart';
 
 class GameScreen extends StatefulWidget {
   final int gameId;
@@ -18,6 +20,20 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
+class PlacedLetter {
+  final int row;
+  final int col;
+  final String letter;
+
+  PlacedLetter({required this.row, required this.col, required this.letter});
+
+  Map<String, dynamic> toJson() => {
+    "row": row,
+    "col": col,
+    "letter": letter, // <-- bu eksik!
+  };
+}
+
 class _GameScreenState extends State<GameScreen> {
   List<Map<String, dynamic>> boardData = [];
   bool isLoading = true;
@@ -25,31 +41,34 @@ class _GameScreenState extends State<GameScreen> {
   int player2Score = 0;
   int currentTurn = 1;
   String opponent = "";
+  String timeLeft = "";
+  DateTime? endTime;
+  Timer? countdownTimer;
+  bool gameEnded = false;
+  String? selectedLetter;
+  int? selectedLetterIndex;
+  List<PlacedLetter> placedLetters = [];
 
-  bool isHiddenMine(String? type) {
-    return [
-      'puan_bolunmesi',
-      'puan_transferi',
-      'harf_kaybi',
-      'ekstra_hamle_engeli',
-      'kelime_iptali',
-      'bolge_yasagi',
-      'harf_yasagi',
-      'ekstra_hamle_jokeri'
-    ].contains(type);
-  }
 
   @override
   void initState() {
     super.initState();
     fetchBoard();
     fetchGameInfo();
-    Future.delayed(const Duration(seconds: 10), checkGameStillActive);
   }
 
-  void checkGameStillActive() async {
-    await fetchGameInfo(); // süre dolduysa otomatik geri döner
-    Future.delayed(const Duration(seconds: 10), checkGameStillActive);
+  @override
+  void dispose() {
+    countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  bool isHiddenMine(String? type) {
+    return [
+      'puan_bolunmesi', 'puan_transferi', 'harf_kaybi',
+      'ekstra_hamle_engeli', 'kelime_iptali', 'bolge_yasagi',
+      'harf_yasagi', 'ekstra_hamle_jokeri'
+    ].contains(type);
   }
 
   Future<void> fetchGameInfo() async {
@@ -59,7 +78,6 @@ class _GameScreenState extends State<GameScreen> {
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-
       bool gameFound = false;
       for (var game in data) {
         if (game['id'] == widget.gameId) {
@@ -68,49 +86,81 @@ class _GameScreenState extends State<GameScreen> {
             player2Score = game['player2_score'];
             currentTurn = game['current_turn'];
             opponent = game['opponent'];
+            endTime = DateTime.parse(game['end_time']);
           });
+          startCountdownTimer();
           gameFound = true;
           break;
         }
       }
-
-      // Oyun bulunamadıysa yani süre dolduysa (backend artık getirmiyorsa)
       if (!gameFound) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("⏰ Oyun süresi doldu veya tamamlandı.")),
-        );
-        Navigator.pop(context);
+        showGameOverDialog("Oyun süresi doldu.");
       }
     }
   }
 
-  Future<void> fetchBoard() async {
-    try {
-      final response = await http.get(
-        Uri.parse('http://192.168.1.102:8001/start-board/${widget.gameId}'),
-      );
+  void startCountdownTimer() {
+    countdownTimer?.cancel();
+    countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (endTime == null || gameEnded) return;
 
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map && decoded.containsKey('board')) {
-          List<Map<String, dynamic>> rawBoard = List<Map<String, dynamic>>.from(decoded['board']);
+      final diff = endTime!.difference(DateTime.now());
 
-          rawBoard.sort((a, b) {
-            int aIndex = a['row'] * 15 + a['col'];
-            int bIndex = b['row'] * 15 + b['col'];
-            return aIndex.compareTo(bIndex);
-          });
-
-          setState(() {
-            boardData = rawBoard;
-            isLoading = false;
-          });
-        }
+      if (diff.isNegative) {
+        timer.cancel();
+        showGameOverDialog("Süre doldu.");
       } else {
-        throw Exception('Tahta verisi alınamadı');
+        setState(() {
+          final m = diff.inMinutes.remainder(60).toString().padLeft(2, '0');
+          final s = diff.inSeconds.remainder(60).toString().padLeft(2, '0');
+          timeLeft = "$m:$s";
+        });
       }
-    } catch (e) {
-      print('Hata: $e');
+    });
+  }
+
+  Future<void> showGameOverDialog(String message) async {
+    gameEnded = true;
+    String winner;
+    if (player1Score > player2Score) {
+      winner = "${widget.username} kazandı!";
+    } else if (player2Score > player1Score) {
+      winner = "$opponent kazandı!";
+    } else {
+      winner = "Berabere!";
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text("🏁 Oyun Bitti"),
+        content: Text("$message\n\nKazanan: $winner\nSen: $player1Score\nRakip: $player2Score"),
+      ),
+    );
+
+    await Future.delayed(const Duration(seconds: 5));
+    if (mounted) {
+      Navigator.of(context).pop(); // dialog
+      Navigator.of(context).pop(); // geri
+    }
+  }
+
+  Future<void> fetchBoard() async {
+    final response = await http.get(
+      Uri.parse('http://192.168.1.102:8001/start-board/${widget.gameId}'),
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      if (decoded.containsKey('board')) {
+        List<Map<String, dynamic>> rawBoard = List<Map<String, dynamic>>.from(decoded['board']);
+        rawBoard.sort((a, b) => (a['row'] * 15 + a['col']).compareTo(b['row'] * 15 + b['col']));
+        setState(() {
+          boardData = rawBoard;
+          isLoading = false;
+        });
+      }
     }
   }
 
@@ -161,6 +211,7 @@ class _GameScreenState extends State<GameScreen> {
             children: [
               Text('📊 Senin Skorun: $player1Score', style: const TextStyle(fontSize: 14)),
               Text('📊 Rakip Skoru: $player2Score', style: const TextStyle(fontSize: 14)),
+              Text('🕒 Kalan: $timeLeft', style: const TextStyle(fontSize: 14)),
             ],
           ),
         ],
@@ -177,31 +228,54 @@ class _GameScreenState extends State<GameScreen> {
       itemCount: boardData.length,
       itemBuilder: (context, index) {
         final cell = boardData[index];
+        final row = cell['row'];
+        final col = cell['col'];
         final letter = cell['letter'];
         final special = cell['special_type'];
 
+        final placed = placedLetters.firstWhereOrNull((pl) => pl.row == row && pl.col == col);
+
         Widget content;
 
-        if (letter != null) {
+        if (placed != null) {
+          content = Text(placed.letter, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold));
+        } else if (letter != null) {
           if (special != null && isHiddenMine(special)) {
-            content = Image.asset('assets/images/$special.png', width: 40, height: 40, errorBuilder: (_, __, ___) => const Icon(Icons.error, size: 16));
+            content = Image.asset('assets/images/$special.png', width: 40, height: 40, errorBuilder: (_, __, ___) => const Icon(Icons.error));
           } else {
             content = Text(letter, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22));
           }
         } else if (special != null && !isHiddenMine(special)) {
-          content = Image.asset('assets/images/$special.png', width: 40, height: 40, errorBuilder: (_, __, ___) => const Icon(Icons.error, size: 16));
+          content = Image.asset(
+            'assets/images/$special.png',
+            width: 40,
+            height: 40,
+            errorBuilder: (_, __, ___) => const Icon(Icons.error),
+          );
         } else {
-          content = const SizedBox.shrink();
+          content = const SizedBox.shrink(); // boş hücre
         }
 
-        return Container(
-          margin: const EdgeInsets.all(1),
-          color: Colors.grey.shade200,
-          child: Center(child: content),
+        return GestureDetector(
+          onTap: () {
+            if (selectedLetter != null && letter == null && placed == null) {
+              setState(() {
+                placedLetters.add(PlacedLetter(row: row, col: col, letter: selectedLetter!));
+                selectedLetter = null;
+                selectedLetterIndex = null;
+              });
+            }
+          },
+          child: Container(
+            margin: const EdgeInsets.all(1),
+            color: Colors.grey.shade200,
+            child: Center(child: content),
+          ),
         );
       },
     );
   }
+
 
   Widget _buildBottomButtons() {
     return Padding(
@@ -221,6 +295,12 @@ class _GameScreenState extends State<GameScreen> {
             label: const Text('Teslim Ol'),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
           ),
+          ElevatedButton.icon(
+            onPressed: placedLetters.isEmpty ? null : submitMove,
+            icon: const Icon(Icons.check),
+            label: const Text("Hamleyi Bitir"),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+          ),
         ],
       ),
     );
@@ -230,14 +310,12 @@ class _GameScreenState extends State<GameScreen> {
     final response = await http.post(
       Uri.parse('http://192.168.1.102:8001/pass-turn'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'game_id': widget.gameId,
-        'username': widget.username,
-      }),
+      body: jsonEncode({'game_id': widget.gameId, 'username': widget.username}),
     );
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
+      fetchGameInfo();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message'])));
       fetchGameInfo(); // sırayı güncelle
     } else {
@@ -250,16 +328,40 @@ class _GameScreenState extends State<GameScreen> {
     final response = await http.post(
       Uri.parse('http://192.168.1.102:8001/surrender'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'game_id': widget.gameId,
-        'username': widget.username,
-      }),
+      body: jsonEncode({'game_id': widget.gameId, 'username': widget.username}),
     );
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Oyun bitti. Kazanan: ${data['winner']}')));
-      Navigator.pop(context); // anasayfaya dön
+      showGameOverDialog("Teslim oldun. Kazanan: ${data['winner']}");
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: ${error['detail']}')));
+    }
+  }
+
+  Future<void> submitMove() async {
+    final response = await http.post(
+      Uri.parse('http://192.168.1.102:8001/play-move'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        "game_id": widget.gameId,
+        "username": widget.username,
+        "word": placedLetters.map((e) => e.letter).join(),
+        "positions": placedLetters.map((e) => e.toJson()).toList(),
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Hamle gönderildi')));
+      fetchBoard();
+      fetchGameInfo();
+      setState(() {
+        placedLetters.clear();
+        selectedLetter = null;
+        selectedLetterIndex = null;
+        // -> Harf listesini güncellemek için FutureBuilder tetiklenir
+      });
     } else {
       final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: ${error['detail']}')));
@@ -290,30 +392,40 @@ class _GameScreenState extends State<GameScreen> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: letters.map<Widget>((tile) {
-                return Container(
-                  width: 40,
-                  height: 40,
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Center(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(tile['letter'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                          Text('${tile['point']}', style: const TextStyle(fontSize: 12)),
-                        ],
+              children: List.generate(letters.length, (index) {
+                final tile = letters[index];
+                final isSelected = selectedLetterIndex == index;
+
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      selectedLetter = tile['letter'];
+                      selectedLetterIndex = index;
+                    });
+                  },
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    decoration: BoxDecoration(
+                      color: isSelected ? Colors.green : Colors.orange,
+                      borderRadius: BorderRadius.circular(6),
+                      border: isSelected ? Border.all(color: Colors.black, width: 2) : null,
+                    ),
+                    child: Center(
+                      child: FittedBox(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(tile['letter'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                            Text('${tile['point']}', style: const TextStyle(fontSize: 12)),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 );
-              }).toList(),
+              }),
             ),
           ),
         );

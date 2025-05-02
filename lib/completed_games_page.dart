@@ -22,7 +22,7 @@ class _CompletedGamesPageState extends State<CompletedGamesPage> {
 
   Future<void> fetchCompletedGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.103:102/completed-games?username=${widget.username}'),
+      Uri.parse('http://192.168.1.102:8001/completed-games/${widget.username}'),
     );
 
     if (response.statusCode == 200) {
@@ -40,37 +40,48 @@ class _CompletedGamesPageState extends State<CompletedGamesPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Biten Oyunlar'),
+        title: const Text('🧾 Biten Oyunlar'),
         backgroundColor: Colors.deepPurple,
       ),
-      body: ListView.builder(
-        itemCount: completedGames.length,
-        itemBuilder: (context, index) {
-          final game = completedGames[index];
-          return Card(
-            margin: const EdgeInsets.all(12),
-            child: ListTile(
-              leading: const Icon(Icons.check_circle, color: Colors.green),
-              title: Text("Rakip: ${game['opponent']}"),
-              subtitle: Text("Skor: ${game['your_score']} - ${game['opponent_score']}"),
-              trailing: Text(
-                game['result'] == 'win'
-                    ? 'Kazandınız'
-                    : game['result'] == 'lose'
-                    ? 'Kaybettiniz'
-                    : 'Beraberlik',
-                style: TextStyle(
-                  color: game['result'] == 'win'
-                      ? Colors.green
+      body: RefreshIndicator(
+        onRefresh: fetchCompletedGames,
+        child: completedGames.isEmpty
+            ? const Center(child: Text('Henüz biten oyun yok'))
+            : ListView.builder(
+          itemCount: completedGames.length,
+          itemBuilder: (context, index) {
+            final game = completedGames[index];
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: ListTile(
+                leading: const Icon(Icons.sports_esports, color: Colors.deepPurple),
+                title: Text("Rakip: ${game['opponent']}"),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("Skor: ${game['your_score']} - ${game['opponent_score']}"),
+                    Text("Oyun ID: ${game['id']}"),
+                  ],
+                ),
+                trailing: Text(
+                  game['result'] == 'win'
+                      ? 'Kazandınız'
                       : game['result'] == 'lose'
-                      ? Colors.red
-                      : Colors.orange,
-                  fontWeight: FontWeight.bold,
+                      ? 'Kaybettiniz'
+                      : 'Berabere',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: game['result'] == 'win'
+                        ? Colors.green
+                        : game['result'] == 'lose'
+                        ? Colors.red
+                        : Colors.orange,
+                  ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

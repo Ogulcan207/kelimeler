@@ -74,7 +74,7 @@ def start_game(
 def active_games(username: str, db: Session = Depends(get_db)):
     return crud.get_active_games_by_user(db, username)
 
-@app.get("/completed-games/{username}", response_model=List[schemas.GameOut])
+@app.get("/completed-games/{username}")
 def completed_games(username: str, db: Session = Depends(get_db)):
     return crud.get_completed_games_by_user(db, username)
 
@@ -216,6 +216,30 @@ def start_board(game_id: int, db: Session = Depends(get_db)):
 
     return {"board": board}  # ✅ BU formatı döndür
 
+@app.get("/win-stats/{username}")
+def get_win_stats(username: str, db: Session = Depends(get_db)):
+    user = crud.get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+    games = db.query(models.Game).filter(
+        ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
+        models.Game.is_completed == True
+    ).all()
+
+    total = len(games)
+    wins = 0
+
+    for game in games:
+        you_are_p1 = game.player1_id == user.id
+        your_score = game.player1_score if you_are_p1 else game.player2_score
+        opp_score = game.player2_score if you_are_p1 else game.player1_score
+        if your_score > opp_score:
+            wins += 1
+
+    percentage = int((wins / total) * 100) if total > 0 else 0
+    return {"win_rate": percentage, "played": total, "wins": wins}
+
 @app.get("/get-letters/{game_id}/{username}")
 def get_player_letters(game_id: int, username: str, db: Session = Depends(get_db)):
     letters = db.query(models.PlayerLetters).filter_by(game_id=game_id, username=username).all()
@@ -253,9 +277,9 @@ def surrender(game_id: int = Body(...), username: str = Body(...), db: Session =
     game.is_completed = True
 
     if game.player1_id == user.id:
-        game.player2_score += 9999  # Teslim olan kaybeder
+        game.player2_score += 500  # Teslim olan kaybeder
     else:
-        game.player1_score += 9999
+        game.player1_score += 500
 
     db.commit()
     return {"message": "Teslim olundu", "winner": game.player2_id if game.player1_id == user.id else game.player1_id}

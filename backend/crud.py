@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from backend.constants import LETTER_POOL
 from typing import List
+from collections import Counter
 
 def get_user_by_username(db: Session, username: str):
     return db.query(models.User).filter(models.User.username == username).first()
@@ -80,10 +81,35 @@ def get_completed_games_by_user(db: Session, username: str):
     user = get_user_by_username(db, username)
     if not user:
         return []
-    return db.query(models.Game).filter(
+
+    games = db.query(models.Game).filter(
         ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
         models.Game.is_completed == True
     ).all()
+
+    result = []
+    for game in games:
+        you_are_p1 = game.player1_id == user.id
+        your_score = game.player1_score if you_are_p1 else game.player2_score
+        opponent_score = game.player2_score if you_are_p1 else game.player1_score
+        opponent_id = game.player2_id if you_are_p1 else game.player1_id
+        opponent = db.query(models.User).filter(models.User.id == opponent_id).first()
+
+        if your_score > opponent_score:
+            result_str = "win"
+        elif your_score < opponent_score:
+            result_str = "lose"
+        else:
+            result_str = "draw"
+
+        result.append({
+            "id": game.id,
+            "your_score": your_score,
+            "opponent_score": opponent_score,
+            "opponent": opponent.username if opponent else "Bilinmiyor",
+            "result": result_str
+        })
+    return result
 
 def match_or_create_game(db: Session, username: str, mode: str):
     pending_match = db.query(models.PendingMatch).filter(models.PendingMatch.mode == mode).first()
@@ -156,11 +182,17 @@ def get_active_games_by_user(db: Session, username: str):
             "player1_score": game.player1_score,
             "player2_score": game.player2_score,
             "current_turn": game.current_turn,
-            "opponent": opponent.username if opponent else "Bilinmiyor"
+            "opponent": opponent.username if opponent else "Bilinmiyor",
+            "end_time": game.end_time.isoformat() if game.end_time else None  # 👈 eklenecek
         })
-
+    db.commit()
     return result
 
+def load_turkish_words():
+    with open("assets/turkce_kelimeler.txt", "r", encoding="utf-8") as f:
+        return set(word.strip().upper() for word in f)
+    
+VALID_WORDS = load_turkish_words()
 
 FIXED_BONUS_POSITIONS = {
     "k3": [
@@ -276,7 +308,34 @@ def distribute_letters(db: Session, game_id: int, player_usernames: list[str]):
                     break
     db.commit()
 
+def draw_new_letters(db: Session, game_id: int, username: str, count: int):
+    from backend.constants import LETTER_POOL
+    import random
+
+    pool_letters = db.query(models.LetterPool).filter(
+        models.LetterPool.game_id == game_id,
+        models.LetterPool.remaining_count > 0
+    ).all()
+
+    for _ in range(count):
+        if not pool_letters:
+            break
+        chosen = random.choice(pool_letters)
+        chosen.remaining_count -= 1
+        db.add(models.PlayerLetters(
+            game_id=game_id,
+            username=username,
+            letter=chosen.letter,
+            point=next((p for l, (c, p) in LETTER_POOL.items() if l == chosen.letter), 1),
+            used=False
+        ))
+        db.commit()  # Her harften sonra güncelle
+
+        # Yeniden çekmek için filtrele
+        pool_letters = [p for p in pool_letters if p.remaining_count > 0]
+
 def play_move_logic(db: Session, move: schemas.PlayMove):
+
     game = db.query(models.Game).filter(models.Game.id == move.game_id).first()
     user = get_user_by_username(db, move.username)
 
@@ -303,9 +362,53 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
        (game.current_turn == 2 and game.player2_id != user.id):
         raise HTTPException(status_code=403, detail="Sıra sende değil")
 
-    # Puan
-    score = len(move.word) * 10
+    word = move.word.upper()
+    if word not in VALID_WORDS:
+        raise HTTPException(status_code=400, detail=f"'{word}' geçerli bir kelime değil")
 
+    # Oyuncunun yeterli harfi var mı?
+    word_count = Counter(word)
+    available_letters = db.query(models.PlayerLetters).filter_by(
+        game_id=move.game_id, username=move.username, used=False
+    ).all()
+    inventory_count = Counter([l.letter for l in available_letters])
+
+    for letter, required in word_count.items():
+        if inventory_count[letter] < required:
+            raise HTTPException(status_code=400, detail=f"'{letter}' harfinden yeterli yok")
+
+    # Mayın kontrolü
+    score = 0
+    hit_mine = None
+    for pos, char in zip(move.positions, word):
+        cell = db.query(models.GameGrid).filter_by(
+            game_id=move.game_id, row=pos.row, col=pos.col
+        ).first()
+        if cell:
+            cell.letter = char
+            if cell.special_type in ['puan_bolunmesi', 'puan_transferi', 'harf_kaybi',
+                                     'ekstra_hamle_engeli', 'kelime_iptali']:
+                hit_mine = cell.special_type
+        score += next((p for l, (c, p) in LETTER_POOL.items() if l == char), 1)
+
+    # Mayına göre puan ayarla
+    if hit_mine == "puan_bolunmesi":
+        score = int(score * 0.3)
+    elif hit_mine == "puan_transferi":
+        if game.player1_id == user.id:
+            game.player2_score += score
+        else:
+            game.player1_score += score
+        score = 0
+    elif hit_mine == "kelime_iptali":
+        score = 0
+    elif hit_mine == "harf_kaybi":
+        db.query(models.PlayerLetters).filter_by(
+            game_id=move.game_id, username=move.username
+        ).delete()
+    # Diğer mayın türleri eklenebilir
+
+    # Puanı ekle
     if game.player1_id == user.id:
         game.player1_score += score
         game.current_turn = 2
@@ -313,15 +416,21 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
         game.player2_score += score
         game.current_turn = 1
 
-    # Harfleri yerleştir
-    for pos, char in zip(move.positions, move.word):
-        cell = db.query(models.GameGrid).filter_by(game_id=move.game_id, row=pos.row, col=pos.col).first()
-        if cell:
-            cell.letter = char
+    # Kullanılan harfleri işaretle
+    for char in word:
+        used_tile = db.query(models.PlayerLetters).filter_by(
+            game_id=move.game_id, username=move.username,
+            letter=char, used=False
+        ).first()
+        if used_tile:
+            used_tile.used = True
+
+    # Yeni harf ver
+    draw_new_letters(db, move.game_id, move.username, len(word))
 
     db.commit()
 
     return {
-        "message": "Hamle yapıldı",
+        "message": f"Hamle yapıldı. Puan: {score}",
         "next_turn": game.current_turn
     }
