@@ -25,7 +25,7 @@ class _ActiveGamesPageState extends State<ActiveGamesPage> {
 
   Future<void> fetchActiveGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.196:8001/get_active_games_by_user/${widget.username}'),
+      Uri.parse('http://192.168.1.102:8001/get_active_games_by_user/${widget.username}'),
     );
 
     if (response.statusCode == 200) {

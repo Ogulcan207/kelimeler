@@ -21,6 +21,11 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> {
   List<Map<String, dynamic>> boardData = [];
   bool isLoading = true;
+  int player1Score = 0;
+  int player2Score = 0;
+  int currentTurn = 1;
+  String opponent = "";
+
   bool isHiddenMine(String? type) {
     return [
       'puan_bolunmesi',
@@ -38,34 +43,74 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     fetchBoard();
+    fetchGameInfo();
+    Future.delayed(const Duration(seconds: 10), checkGameStillActive);
   }
 
-  Future<void> fetchBoard() async {
+  void checkGameStillActive() async {
+    await fetchGameInfo(); // süre dolduysa otomatik geri döner
+    Future.delayed(const Duration(seconds: 10), checkGameStillActive);
+  }
+
+  Future<void> fetchGameInfo() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.196:8001/start-board/${widget.gameId}'),
+      Uri.parse('http://192.168.1.102:8001/get_active_games_by_user/${widget.username}'),
     );
 
     if (response.statusCode == 200) {
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map && decoded.containsKey('board')) {
-        List<Map<String, dynamic>> rawBoard = List<Map<String, dynamic>>.from(decoded['board']);
+      final data = jsonDecode(response.body);
 
-        // ✅ BURAYA EKLE
-        rawBoard.sort((a, b) {
-          int aIndex = a['row'] * 15 + a['col'];
-          int bIndex = b['row'] * 15 + b['col'];
-          return aIndex.compareTo(bIndex);
-        });
-
-        setState(() {
-          boardData = rawBoard;
-          isLoading = false;
-        });
-      } else {
-        print("⚠️ Beklenmeyen veri formatı: $decoded");
+      bool gameFound = false;
+      for (var game in data) {
+        if (game['id'] == widget.gameId) {
+          setState(() {
+            player1Score = game['player1_score'];
+            player2Score = game['player2_score'];
+            currentTurn = game['current_turn'];
+            opponent = game['opponent'];
+          });
+          gameFound = true;
+          break;
+        }
       }
-    } else {
-      throw Exception('Tahta verisi alınamadı');
+
+      // Oyun bulunamadıysa yani süre dolduysa (backend artık getirmiyorsa)
+      if (!gameFound) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("⏰ Oyun süresi doldu veya tamamlandı.")),
+        );
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  Future<void> fetchBoard() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://192.168.1.102:8001/start-board/${widget.gameId}'),
+      );
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded.containsKey('board')) {
+          List<Map<String, dynamic>> rawBoard = List<Map<String, dynamic>>.from(decoded['board']);
+
+          rawBoard.sort((a, b) {
+            int aIndex = a['row'] * 15 + a['col'];
+            int bIndex = b['row'] * 15 + b['col'];
+            return aIndex.compareTo(bIndex);
+          });
+
+          setState(() {
+            boardData = rawBoard;
+            isLoading = false;
+          });
+        }
+      } else {
+        throw Exception('Tahta verisi alınamadı');
+      }
+    } catch (e) {
+      print('Hata: $e');
     }
   }
 
@@ -90,6 +135,7 @@ class _GameScreenState extends State<GameScreen> {
             ),
           ),
           _buildBottomButtons(),
+          _buildLetterRack(),
         ],
       ),
     );
@@ -99,12 +145,24 @@ class _GameScreenState extends State<GameScreen> {
     return Container(
       color: Colors.deepPurple.shade100,
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
         children: [
-          Text('👤 ${widget.username}', style: const TextStyle(fontSize: 16)),
-          const Text('Kalan Harf: 93', style: TextStyle(fontSize: 16)),
-          const Text('🎯 Başarı: 0%', style: TextStyle(fontSize: 16)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('👤 Sen: ${widget.username}', style: const TextStyle(fontSize: 16)),
+              Text('🆚 Rakip: $opponent', style: const TextStyle(fontSize: 16)),
+              Text('🎯 Tur: ${currentTurn == 1 ? "1" : "2"}', style: const TextStyle(fontSize: 16)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('📊 Senin Skorun: $player1Score', style: const TextStyle(fontSize: 14)),
+              Text('📊 Rakip Skoru: $player2Score', style: const TextStyle(fontSize: 14)),
+            ],
+          ),
         ],
       ),
     );
@@ -125,43 +183,17 @@ class _GameScreenState extends State<GameScreen> {
         Widget content;
 
         if (letter != null) {
-          // ✅ Hücrede harf varsa ve mayın varsa: resmi göster (patladı)
           if (special != null && isHiddenMine(special)) {
-            final imagePath = 'assets/images/$special.png';
-            content = Image.asset(
-              imagePath,
-              width: 40,
-              height: 40,
-              errorBuilder: (context, error, stackTrace) {
-                return const Icon(Icons.error, size: 16);
-              },
-            );
+            content = Image.asset('assets/images/$special.png', width: 40, height: 40, errorBuilder: (_, __, ___) => const Icon(Icons.error, size: 16));
           } else {
-            // ✅ Sadece harf varsa
-            content = Text(
-              letter,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 22,
-                color: Colors.black,
-              ),
-            );
+            content = Text(letter, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22));
           }
         } else if (special != null && !isHiddenMine(special)) {
-          // ✅ Bonus (h2, h3, k2, k3) gibi her zaman görünenleri göster
-          final imagePath = 'assets/images/$special.png';
-          content = Image.asset(
-            imagePath,
-            width: 40,
-            height: 40,
-            errorBuilder: (context, error, stackTrace) {
-              return const Icon(Icons.error, size: 16);
-            },
-          );
+          content = Image.asset('assets/images/$special.png', width: 40, height: 40, errorBuilder: (_, __, ___) => const Icon(Icons.error, size: 16));
         } else {
-          // ✅ Boş hücre
           content = const SizedBox.shrink();
         }
+
         return Container(
           margin: const EdgeInsets.all(1),
           color: Colors.grey.shade200,
@@ -178,23 +210,114 @@ class _GameScreenState extends State<GameScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           ElevatedButton.icon(
-            onPressed: () {
-              // TODO: Pas geç
-            },
+            onPressed: passTurn,
             icon: const Icon(Icons.skip_next),
             label: const Text('Pas'),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
           ),
           ElevatedButton.icon(
-            onPressed: () {
-              // TODO: Teslim ol
-            },
+            onPressed: surrenderGame,
             icon: const Icon(Icons.flag),
             label: const Text('Teslim Ol'),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> passTurn() async {
+    final response = await http.post(
+      Uri.parse('http://192.168.1.102:8001/pass-turn'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'game_id': widget.gameId,
+        'username': widget.username,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(data['message'])));
+      fetchGameInfo(); // sırayı güncelle
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: ${error['detail']}')));
+    }
+  }
+
+  Future<void> surrenderGame() async {
+    final response = await http.post(
+      Uri.parse('http://192.168.1.102:8001/surrender'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'game_id': widget.gameId,
+        'username': widget.username,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Oyun bitti. Kazanan: ${data['winner']}')));
+      Navigator.pop(context); // anasayfaya dön
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: ${error['detail']}')));
+    }
+  }
+
+  Widget _buildLetterRack() {
+    return FutureBuilder<http.Response>(
+      future: http.get(Uri.parse('http://192.168.1.102:8001/get-letters/${widget.gameId}/${widget.username}')),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox(height: 60, child: Center(child: CircularProgressIndicator()));
+        }
+
+        if (snapshot.hasError || snapshot.data == null || snapshot.data!.statusCode != 200) {
+          return const Padding(
+            padding: EdgeInsets.all(8.0),
+            child: Text('Harfler yüklenemedi'),
+          );
+        }
+
+        final decoded = jsonDecode(snapshot.data!.body);
+        final letters = List<Map<String, dynamic>>.from(decoded['letters']);
+
+        return Container(
+          color: Colors.orange.shade100,
+          padding: const EdgeInsets.all(8),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: letters.map<Widget>((tile) {
+                return Container(
+                  width: 40,
+                  height: 40,
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.orange,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(tile['letter'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                          Text('${tile['point']}', style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        );
+      },
     );
   }
 }

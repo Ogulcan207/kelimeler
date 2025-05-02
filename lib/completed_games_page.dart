@@ -22,7 +22,7 @@ class _CompletedGamesPageState extends State<CompletedGamesPage> {
 
   Future<void> fetchCompletedGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.103:196/completed-games?username=${widget.username}'),
+      Uri.parse('http://192.168.1.103:102/completed-games?username=${widget.username}'),
     );
 
     if (response.statusCode == 200) {

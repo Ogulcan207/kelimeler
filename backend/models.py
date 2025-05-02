@@ -37,6 +37,7 @@ class Game(Base):
 
     player1 = relationship("User", foreign_keys=[player1_id], back_populates="games_as_player1")
     player2 = relationship("User", foreign_keys=[player2_id], back_populates="games_as_player2")
+    end_time = Column(DateTime, nullable=True)  # 🎯 Burası yeni eklenen alan
 
 class PendingMatch(Base):
     __tablename__ = "pending_matches"
@@ -54,3 +55,20 @@ class GameGrid(Base):
     col = Column(Integer, nullable=False)
     letter = Column(String(1), nullable=True)  # Hamle yapılmadıysa boş olabilir
     special_type = Column(String(50), nullable=True)  # bonus veya mayın tipi (örn: 'puan_bolme')
+
+# models.py
+class LetterPool(Base):
+    __tablename__ = 'letter_pool'
+    id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.id"))
+    letter = Column(String(2), nullable=False)
+    remaining_count = Column(Integer, nullable=False)
+
+class PlayerLetters(Base):
+    __tablename__ = "player_letters"
+    id = Column(Integer, primary_key=True)
+    game_id = Column(Integer)
+    username = Column(String)  # ✅ bu olmalı
+    letter = Column(String)
+    point = Column(Integer)
+    used = Column(Boolean, default=False)

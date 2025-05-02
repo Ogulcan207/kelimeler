@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from backend import models, schemas, crud
 from backend.database import engine, SessionLocal
 from typing import List
-from datetime import datetime
-
+from datetime import datetime, timedelta
+from backend.crud import initialize_letter_pool, deal_letters_to_players
+import random
 models.Base.metadata.create_all(bind=engine)
 print("💡 FastAPI başlatılıyor...")
 
@@ -46,11 +47,27 @@ def start_game(
     db: Session = Depends(get_db)
 ):
     result = crud.match_or_create_game(db, username, mode)
+
+    # Eşleşme sağlandıysa süreyi ayarla
     if result:
-        # Eşleşme sağlandı ve yeni oyun oluşturuldu
-        return {"message": "Oyun başlatıldı", "game_id": result.id}
+        game = db.query(models.Game).filter(models.Game.id == result.id).first()
+
+        if mode == "2_min":
+            duration = timedelta(minutes=2)
+        elif mode == "5_min":
+            duration = timedelta(minutes=5)
+        elif mode == "12_hour":
+            duration = timedelta(hours=12)
+        elif mode == "24_hour":
+            duration = timedelta(hours=24)
+        else:
+            raise HTTPException(status_code=400, detail="Geçersiz oyun modu")
+
+        game.end_time = datetime.utcnow() + duration
+        db.commit()
+
+        return {"message": "Oyun başlatıldı", "game_id": game.id}
     else:
-        # Beklemeye alındı, eşleşme yok
         return {"message": "Bekleniyor", "waiting": True}
 
 @app.get("/active-games/{username}", response_model=List[schemas.GameOut])
@@ -113,23 +130,36 @@ def join_pending_game(
     db: Session = Depends(get_db)
 ):
     pending = db.query(models.PendingMatch).filter(models.PendingMatch.id == pending_id).first()
-
     if not pending:
         raise HTTPException(status_code=404, detail="Pending match bulunamadı.")
 
     player1 = crud.get_user_by_username(db, pending.username)
     player2 = crud.get_user_by_username(db, username)
-
     if not player1 or not player2:
         raise HTTPException(status_code=404, detail="Oyuncu bulunamadı.")
 
-    # Yeni game oluştur
+    starting_turn = random.choice([1, 2])
+
+    mode_value = pending.mode.value
+    if mode_value == "2_min":
+        duration = timedelta(minutes=2)
+    elif mode_value == "5_min":
+        duration = timedelta(minutes=5)
+    elif mode_value == "12_hour":
+        duration = timedelta(hours=12)
+    elif mode_value == "24_hour":
+        duration = timedelta(hours=24)
+    else:
+        raise HTTPException(status_code=400, detail="Geçersiz oyun modu")
+
+    # 🧩 Yeni oyun
     new_game = models.Game(
         player1_id=player1.id,
         player2_id=player2.id,
         mode=pending.mode,
         start_time=datetime.utcnow(),
-        current_turn=1,
+        end_time=datetime.utcnow() + duration,
+        current_turn=starting_turn,
         is_active=True,
         is_completed=False,
         player1_score=0,
@@ -137,19 +167,21 @@ def join_pending_game(
     )
 
     db.add(new_game)
-    db.delete(pending)  # Pending'i siliyoruz
+    db.delete(pending)
     db.commit()
     db.refresh(new_game)
+
     crud.create_game_grid(db, new_game.id)
+    initialize_letter_pool(db, new_game.id)
+    deal_letters_to_players(db, new_game.id, [player1.id, player2.id])
 
-    return {"message": "Oyun başarıyla oluşturuldu", "game_id": new_game.id}
-
-@app.post("/play-move")
-def play_move(move: schemas.PlayMove, db: Session = Depends(get_db)):
-    result = crud.play_move_logic(db, move)
-    if not result:
-        raise HTTPException(status_code=400, detail="Hamle geçersiz")
-    return result
+    return {
+        "message": "Oyun başarıyla oluşturuldu",
+        "game_id": new_game.id,
+        "starting_turn": starting_turn,
+        "player1": player1.username,
+        "player2": player2.username
+    }
 
 @app.get("/grid/{game_id}")
 def get_game_grid(game_id: int, db: Session = Depends(get_db)):
@@ -183,3 +215,47 @@ def start_board(game_id: int, db: Session = Depends(get_db)):
     ]
 
     return {"board": board}  # ✅ BU formatı döndür
+
+@app.get("/get-letters/{game_id}/{username}")
+def get_player_letters(game_id: int, username: str, db: Session = Depends(get_db)):
+    letters = db.query(models.PlayerLetters).filter_by(game_id=game_id, username=username).all()
+    return {"letters": [{"letter": l.letter, "point": l.point} for l in letters]}
+
+@app.post("/play-move")
+def play_move(move: schemas.PlayMove, db: Session = Depends(get_db)):
+    return crud.play_move_logic(db, move)
+
+@app.post("/pass-turn")
+def pass_turn(game_id: int = Body(...), username: str = Body(...), db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    user = crud.get_user_by_username(db, username)
+
+    if not game or not user:
+        raise HTTPException(status_code=404, detail="Oyun veya kullanıcı bulunamadı")
+
+    if (game.current_turn == 1 and game.player1_id != user.id) or \
+       (game.current_turn == 2 and game.player2_id != user.id):
+        raise HTTPException(status_code=403, detail="Sıra sende değil")
+
+    game.current_turn = 2 if game.current_turn == 1 else 1
+    db.commit()
+    return {"message": "Pas geçildi", "next_turn": game.current_turn}
+
+@app.post("/surrender")
+def surrender(game_id: int = Body(...), username: str = Body(...), db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    user = crud.get_user_by_username(db, username)
+
+    if not game or not user:
+        raise HTTPException(status_code=404, detail="Oyun veya kullanıcı bulunamadı")
+
+    game.is_active = False
+    game.is_completed = True
+
+    if game.player1_id == user.id:
+        game.player2_score += 9999  # Teslim olan kaybeder
+    else:
+        game.player1_score += 9999
+
+    db.commit()
+    return {"message": "Teslim olundu", "winner": game.player2_id if game.player1_id == user.id else game.player1_id}

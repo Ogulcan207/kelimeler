@@ -22,7 +22,7 @@ class _PendingGamesPageState extends State<PendingGamesPage> {
 
   Future<void> fetchPendingGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.196:8001/all-pending-games'),
+      Uri.parse('http://192.168.1.102:8001/all-pending-games'),
     );
 
     if (response.statusCode == 200) {
@@ -38,7 +38,7 @@ class _PendingGamesPageState extends State<PendingGamesPage> {
 
   Future<void> joinPendingGame(int pendingId) async {
     final response = await http.post(
-      Uri.parse('http://192.168.1.196:8001/join-pending-game'),
+      Uri.parse('http://192.168.1.102:8001/join-pending-game'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'pending_id': pendingId, 'username': widget.username}),
     );

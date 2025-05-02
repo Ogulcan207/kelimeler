@@ -1,10 +1,12 @@
 from sqlalchemy.orm import Session
 from backend import models, schemas
 import hashlib, random,string
-from .models import Game, GameMode
+from .models import Game, GameMode, PlayerLetters
 from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy import text
+from backend.constants import LETTER_POOL
+from typing import List
 
 def get_user_by_username(db: Session, username: str):
     return db.query(models.User).filter(models.User.username == username).first()
@@ -122,6 +124,22 @@ def get_active_games_by_user(db: Session, username: str):
     if not user:
         return []
 
+    now = datetime.utcnow()
+
+    # Önce oyunların sürelerini kontrol edip is_active alanlarını güncelle
+    games = db.query(models.Game).filter(
+        ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
+        models.Game.is_active == True
+    ).all()
+
+    for game in games:
+        if game.end_time and now > game.end_time:
+            game.is_active = False
+            game.is_completed = True
+
+    db.commit()
+
+    # Güncel aktif oyunları tekrar çek
     games = db.query(models.Game).filter(
         ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)),
         models.Game.is_active == True
@@ -142,6 +160,7 @@ def get_active_games_by_user(db: Session, username: str):
         })
 
     return result
+
 
 FIXED_BONUS_POSITIONS = {
     "k3": [
@@ -207,23 +226,86 @@ def create_game_grid(db: Session, game_id: int):
     db.add_all(grid_data)
     db.commit()
 
+def initialize_letter_pool(db: Session, game_id: int):
+    for letter, (count, _) in LETTER_POOL.items():
+        db.add(models.LetterPool(game_id=game_id, letter=letter, remaining_count=count))
+    db.commit()
+
+def deal_letters_to_players(db: Session, game_id: int, player_ids: List[int]):
+    for player_id in player_ids:
+        user = db.query(models.User).filter(models.User.id == player_id).first()
+        if not user:
+            continue  # güvenli olması açısından
+        for _ in range(7):
+            available_letters = db.query(models.LetterPool).filter(models.LetterPool.remaining_count > 0).all()
+            if not available_letters:
+                break
+            chosen = random.choice(available_letters)
+            chosen.remaining_count -= 1
+            db.add(models.PlayerLetters(
+                game_id=game_id,
+                username=user.username,
+                letter=chosen.letter,
+                point=next((p for l, (c, p) in LETTER_POOL.items() if l == chosen.letter), 1),
+                used=False
+            ))
+    db.commit()
+
+
+def distribute_letters(db: Session, game_id: int, player_usernames: list[str]):
+    # Havuzdan rastgele 14 harf çek
+    pool = []
+    for letter, (count, point) in LETTER_POOL.items():
+        pool.extend([(letter, point)] * count)
+    random.shuffle(pool)
+
+    used = set()
+    for username in player_usernames:
+        for _ in range(7):
+            while True:
+                letter, point = random.choice(pool)
+                if (username, letter, point) not in used:
+                    used.add((username, letter, point))
+                    db.add(PlayerLetters(
+                        game_id=game_id,
+                        username=username,
+                        letter=letter,
+                        point=point,
+                        used=False,
+                    ))
+                    break
+    db.commit()
 
 def play_move_logic(db: Session, move: schemas.PlayMove):
     game = db.query(models.Game).filter(models.Game.id == move.game_id).first()
-    if not game:
-        raise HTTPException(status_code=404, detail="Oyun bulunamadı.")
-
     user = get_user_by_username(db, move.username)
-    if not user:
-        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı.")
 
-    # Oyuncunun sırası mı?
+    if not game or not user:
+        raise HTTPException(status_code=404, detail="Oyun veya kullanıcı bulunamadı")
+
+    # Süre kontrolü
+    if game.end_time and datetime.utcnow() > game.end_time:
+        game.is_active = False
+        game.is_completed = True
+        db.commit()
+
+        if game.player1_score > game.player2_score:
+            winner = game.player1.username
+        elif game.player2_score > game.player1_score:
+            winner = game.player2.username
+        else:
+            winner = "Berabere"
+
+        raise HTTPException(status_code=400, detail=f"Oyun süresi doldu. Kazanan: {winner}")
+
+    # Sıra kontrolü
     if (game.current_turn == 1 and game.player1_id != user.id) or \
        (game.current_turn == 2 and game.player2_id != user.id):
-        raise HTTPException(status_code=403, detail="Sıra sende değil.")
+        raise HTTPException(status_code=403, detail="Sıra sende değil")
 
-    # Basit puan: kelime uzunluğu * 10
+    # Puan
     score = len(move.word) * 10
+
     if game.player1_id == user.id:
         game.player1_score += score
         game.current_turn = 2
@@ -231,23 +313,15 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
         game.player2_score += score
         game.current_turn = 1
 
-    # Grid’e harfleri yaz
+    # Harfleri yerleştir
     for pos, char in zip(move.positions, move.word):
         cell = db.query(models.GameGrid).filter_by(game_id=move.game_id, row=pos.row, col=pos.col).first()
         if cell:
             cell.letter = char
-        else:
-            new_cell = models.GameGrid(
-                game_id=move.game_id,
-                row=pos.row,
-                col=pos.col,
-                letter=char
-            )
-            db.add(new_cell)
 
     db.commit()
+
     return {
-        "message": "Hamle başarılı",
-        "updated_score": game.player1_score if game.player1_id == user.id else game.player2_score,
-        "next_turn": game.player2.username if game.player1_id == user.id else game.player1.username
+        "message": "Hamle yapıldı",
+        "next_turn": game.current_turn
     }
