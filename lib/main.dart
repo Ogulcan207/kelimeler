@@ -14,15 +14,8 @@ class MyApp extends StatelessWidget {
       title: 'Kelime Mayınları',
       theme: ThemeData(
         fontFamily: 'Poppins',
-        snackBarTheme: const SnackBarThemeData(
-          contentTextStyle: TextStyle(fontFamily: 'Poppins'),
-        ),
-        dialogTheme: const DialogTheme(
-          contentTextStyle: TextStyle(fontFamily: 'Poppins'),
-        ),
-        appBarTheme: const AppBarTheme(
-          titleTextStyle: TextStyle(fontFamily: 'Poppins', fontSize: 20, color: Colors.white),
-        ),
+        primarySwatch: Colors.deepPurple,
+        // diğer theme ayarların...
       ),
       home: const LoginPage(),
     );

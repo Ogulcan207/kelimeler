@@ -159,18 +159,25 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  Future<void> showGameOverDialog(String message) async {
+  Future<void> showGameOverDialog(String message, {String? winnerUsername}) async {
     gameEnded = true;
     String winner;
 
-    bool isPlayer1 = currentTurn == 1 && opponent != widget.username;
+    bool isPlayer1 = true; // Varsayım
+    // widget.username'ın kimin olduğunu tahmin et
+    if (opponent == widget.username) {
+      isPlayer1 = false;
+    }
 
-    if ((isPlayer1 && player1Score > player2Score) ||
+    // Kazananı belirle (teslimiyet hariç)
+    if (winnerUsername != null) {
+      winner = winnerUsername;
+    } else if ((isPlayer1 && player1Score > player2Score) ||
         (!isPlayer1 && player2Score > player1Score)) {
-      winner = "${widget.username} kazandı!";
+      winner = widget.username;
     } else if ((isPlayer1 && player2Score > player1Score) ||
         (!isPlayer1 && player1Score > player2Score)) {
-      winner = "$opponent kazandı!";
+      winner = opponent;
     } else {
       winner = "Berabere!";
     }
@@ -184,7 +191,7 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
 
-    await Future.delayed(const Duration(seconds: 5));
+    await Future.delayed(const Duration(seconds: 3));
     if (mounted) {
       Navigator.of(context).pop(); // dialog
       Navigator.of(context).pop(); // geri
@@ -245,18 +252,19 @@ class _GameScreenState extends State<GameScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('👤 Sen: ${widget.username}', style: const TextStyle(fontSize: 16)),
-              Text('🆚 Rakip: $opponent', style: const TextStyle(fontSize: 16)),
-              Text('🎯 Tur: ${currentTurn == 1 ? "1" : "2"}', style: const TextStyle(fontSize: 16)),
+              Text('👤 Sen: ${widget.username}', style: const TextStyle(fontSize: 16, fontFamily: 'Poppins')),
+              Text('🆚 Rakip: $opponent', style: const TextStyle(fontSize: 16, fontFamily: 'Poppins')),
+              Text('🎯 Tur: ${currentTurn == 1 ? "1" : "2"}', style: const TextStyle(fontSize: 16, fontFamily: 'Poppins')),
+
             ],
           ),
           const SizedBox(height: 6),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('📊 Senin Skorun: $player1Score', style: const TextStyle(fontSize: 14)),
-              Text('📊 Rakip Skoru: $player2Score', style: const TextStyle(fontSize: 14)),
-              Text('🕒 Kalan: $timeLeft', style: const TextStyle(fontSize: 14)),
+              Text('📊 Senin Skorun: $player1Score', style: const TextStyle(fontSize: 14, fontFamily: 'Poppins')),
+              Text('📊 Rakip Skoru: $player2Score', style: const TextStyle(fontSize: 14, fontFamily: 'Poppins')),
+              Text('🕒 Kalan: $timeLeft', style: const TextStyle(fontSize: 14, fontFamily: 'Poppins')),
             ],
           ),
           const SizedBox(height: 6),
@@ -270,7 +278,7 @@ class _GameScreenState extends State<GameScreen> {
                 fontWeight: FontWeight.bold,
                 color: currentWord.isEmpty
                     ? Colors.black
-                    : (isValid ? Colors.green : Colors.red),
+                    : (isValid ? Colors.green : Colors.red), fontFamily: 'Poppins'
               ),
             ),
           ),
@@ -306,12 +314,12 @@ class _GameScreenState extends State<GameScreen> {
         Widget content;
 
         if (placed != null) {
-          content = Text(placed.letter, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold));
+          content = Text(placed.letter, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'Poppins'));
         } else if (letter != null) {
           if (special != null && isHiddenMine(special)) {
             content = Image.asset('assets/images/$special.png', width: 40, height: 40, errorBuilder: (_, __, ___) => const Icon(Icons.error));
           } else {
-            content = Text(letter, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22));
+            content = Text(letter, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22, fontFamily: 'Poppins'));
           }
         } else if (special != null && !isHiddenMine(special)) {
           content = Image.asset(
@@ -414,10 +422,17 @@ class _GameScreenState extends State<GameScreen> {
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      showGameOverDialog("Teslim oldun. Kazanan: ${data['winner']}");
+
+      setState(() {
+        player1Score = data['player1_score'];
+        player2Score = data['player2_score'];
+      });
+      showGameOverDialog("Teslim oldun.", winnerUsername: data['winner']);
     } else {
       final error = jsonDecode(response.body);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: ${error['detail']}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Hata: ${error['detail']}')),
+      );
     }
   }
 
@@ -502,8 +517,8 @@ class _GameScreenState extends State<GameScreen> {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(tile['letter'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                            Text('${tile['point']}', style: const TextStyle(fontSize: 12)),
+                            Text(tile['letter'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, fontFamily: 'Poppins')),
+                            Text('${tile['point']}', style: const TextStyle(fontSize: 12, fontFamily: 'Poppins')),
                           ],
                         ),
                       ),

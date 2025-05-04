@@ -363,8 +363,39 @@ def draw_new_letters(db: Session, game_id: int, username: str, count: int):
 
     db.commit()
 
-def play_move_logic(db: Session, move: schemas.PlayMove):
+def get_full_word_in_direction(db: Session, game_id: int, row: int, col: int, d_row: int, d_col: int):
+    letters = []
 
+    # Geriye doğru tarama
+    r, c = row - d_row, col - d_col
+    while True:
+        cell = db.query(models.GameGrid).filter_by(game_id=game_id, row=r, col=c).first()
+        if cell and cell.letter:
+            letters.insert(0, cell.letter)
+            r -= d_row
+            c -= d_col
+        else:
+            break
+
+    # Mevcut hücre
+    cell_center = db.query(models.GameGrid).filter_by(game_id=game_id, row=row, col=col).first()
+    if cell_center and cell_center.letter:
+        letters.append(cell_center.letter)
+
+    # İleriye doğru tarama
+    r, c = row + d_row, col + d_col
+    while True:
+        cell = db.query(models.GameGrid).filter_by(game_id=game_id, row=r, col=c).first()
+        if cell and cell.letter:
+            letters.append(cell.letter)
+            r += d_row
+            c += d_col
+        else:
+            break
+
+    return ''.join(letters)
+
+def play_move_logic(db: Session, move: schemas.PlayMove):
     game = db.query(models.Game).filter(models.Game.id == move.game_id).first()
     user = get_user_by_username(db, move.username)
 
@@ -372,36 +403,22 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
         raise HTTPException(status_code=404, detail="Oyun veya kullanıcı bulunamadı")
 
     if game.end_time:
-
         if game.end_time.tzinfo is None:
             game_end = TR_TIMEZONE.localize(game.end_time)
         else:
             game_end = game.end_time
-        # Süre kontrolü
+
         if datetime.now(TR_TIMEZONE) > game_end:
             game.is_active = False
             game.is_completed = True
             db.commit()
+            raise HTTPException(status_code=400, detail="Oyun süresi doldu.")
 
-            if game.player1_score > game.player2_score:
-                winner = game.player1.username
-            elif game.player2_score > game.player1_score:
-                winner = game.player2.username
-            else:
-                winner = "Berabere"
-
-            raise HTTPException(status_code=400, detail=f"Oyun süresi doldu. Kazanan: {winner}")
-
-    # Sıra kontrolü
     if (game.current_turn == 1 and game.player1_id != user.id) or \
        (game.current_turn == 2 and game.player2_id != user.id):
         raise HTTPException(status_code=403, detail="Sıra sende değil")
 
     word = move.word.upper()
-    if word not in VALID_WORDS:
-        raise HTTPException(status_code=400, detail=f"'{word}' geçerli bir kelime değil")
-
-    # Oyuncunun yeterli harfi var mı?
     word_count = Counter(word)
     available_letters = db.query(models.PlayerLetters).filter_by(
         game_id=move.game_id, username=move.username, used=False
@@ -412,83 +429,103 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
         if inventory_count[letter] < required:
             raise HTTPException(status_code=400, detail=f"'{letter}' harfinden yeterli yok")
 
-        score = 0
-        hit_mine = None
+    total_score = 0
+    hit_mine = None
+    main_word_cells = []
+
+    # Harfleri tahtaya yerleştir
+    for pos, char in zip(move.positions, word):
+        cell = db.query(models.GameGrid).filter_by(
+            game_id=move.game_id, row=pos.row, col=pos.col
+        ).first()
+        if not cell:
+            continue
+        cell.letter = char
+        main_word_cells.append((pos.row, pos.col))
+
+        # Mayın kontrolü
+        if cell.special_type in ['puan_bolunmesi', 'puan_transferi', 'harf_kaybi', 'kelime_iptali']:
+            hit_mine = cell.special_type
+
+    # --- KELİME OLUŞUMU VE SKOR HESAPLAMA ---
+    all_words = set()
+    base_positions = set((p.row, p.col) for p in move.positions)
+
+    directions = [
+        (0, 1),  # → yatay
+        (1, 0),  # ↓ dikey
+        (1, 1),  # ↘ çapraz
+        (1, -1)  # ↙ çapraz
+    ]
+    for row, col in base_positions:
+        for d_row, d_col in directions:
+            full_word = get_full_word_in_direction(db, move.game_id, row, col, d_row, d_col)
+            if len(full_word) > 1 and full_word not in all_words:
+                all_words.add(full_word)
+
+    for full_word in all_words:
+        if full_word.upper() not in VALID_WORDS:
+            raise HTTPException(status_code=400, detail=f"'{full_word}' geçerli bir kelime değil")
+
+    # Skorları hesapla
+    for pos, char in zip(move.positions, word):
+        cell = db.query(models.GameGrid).filter_by(
+            game_id=move.game_id, row=pos.row, col=pos.col
+        ).first()
+        if not cell:
+            continue
+
+        base_point = next((p for l, (c, p) in LETTER_POOL.items() if l == char), 1)
+        letter_score = base_point
         word_multiplier = 1
 
-        for pos, char in zip(move.positions, word):
-            cell = db.query(models.GameGrid).filter_by(
-                game_id=move.game_id, row=pos.row, col=pos.col
-            ).first()
+        if cell.special_type == "h2":
+            letter_score *= 2
+        elif cell.special_type == "h3":
+            letter_score *= 3
 
-            if not cell:
-                continue
+        if cell.special_type == "k2":
+            word_multiplier *= 2
+        elif cell.special_type == "k3":
+            word_multiplier *= 3
 
-            cell.letter = char  # Tahtaya harfi işle
+        total_score += letter_score * word_multiplier
 
-            # Mayın kontrolü
-            if cell.special_type in ['puan_bolunmesi', 'puan_transferi', 'harf_kaybi',
-                                    'ekstra_hamle_engeli', 'kelime_iptali']:
-                hit_mine = cell.special_type
-
-            base_point = next((p for l, (c, p) in LETTER_POOL.items() if l == char), 1)
-
-            # Özel hücre kontrolü
-            if cell.special_type == 'h2':
-                score += base_point * 2
-            elif cell.special_type == 'h3':
-                score += base_point * 3
-            else:
-                score += base_point
-
-            if cell.special_type == 'k2':
-                word_multiplier *= 2
-            elif cell.special_type == 'k3':
-                word_multiplier *= 3
-
-        score *= word_multiplier
-
-
-    # Mayına göre puan ayarla
+    # Mayın etkileri
     if hit_mine == "puan_bolunmesi":
-        score = int(score * 0.3)
+        total_score = int(total_score * 0.3)
     elif hit_mine == "puan_transferi":
         if game.player1_id == user.id:
-            game.player2_score += score
+            game.player2_score += total_score
         else:
-            game.player1_score += score
-        score = 0
+            game.player1_score += total_score
+        total_score = 0
     elif hit_mine == "kelime_iptali":
-        score = 0
+        total_score = 0
     elif hit_mine == "harf_kaybi":
-        db.query(models.PlayerLetters).filter_by(
-            game_id=move.game_id, username=move.username
-        ).delete()
-    # Diğer mayın türleri eklenebilir
+        db.query(models.PlayerLetters).filter_by(game_id=move.game_id, username=move.username).delete()
 
-    # Puanı ekle
+    # Puanı uygula ve sırayı değiştir
     if game.player1_id == user.id:
-        game.player1_score += score
+        game.player1_score += total_score
         game.current_turn = 2
     else:
-        game.player2_score += score
+        game.player2_score += total_score
         game.current_turn = 1
 
     # Kullanılan harfleri işaretle
     for char in word:
-        used_tile = db.query(models.PlayerLetters).filter_by(
+        tile = db.query(models.PlayerLetters).filter_by(
             game_id=move.game_id, username=move.username,
             letter=char, used=False
         ).first()
-        if used_tile:
-            used_tile.used = True
+        if tile:
+            tile.used = True
 
-    # Yeni harf ver
     draw_new_letters(db, move.game_id, move.username, len(word))
-
     db.commit()
 
     return {
-        "message": f"Hamle yapıldı. Puan: {score}",
+        "message": f"Hamle yapıldı. Toplam puan: {total_score}",
         "next_turn": game.current_turn
     }

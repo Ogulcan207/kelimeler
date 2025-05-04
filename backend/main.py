@@ -203,7 +203,7 @@ def start_board(game_id: int, db: Session = Depends(get_db)):
         for cell in grid
     ]
 
-    return {"board": board}  # ✅ BU formatı döndür
+    return JSONResponse(content={"board": board}, media_type="application/json; charset=utf-8")
 
 @app.get("/win-stats/{username}")
 def get_win_stats(username: str, db: Session = Depends(get_db)):
@@ -273,9 +273,16 @@ def surrender(game_id: int = Body(...), username: str = Body(...), db: Session =
     game.is_completed = True
 
     if game.player1_id == user.id:
-        game.player2_score += 500  # Teslim olan kaybeder
+        game.player2_score += 500
+        winner_username = db.query(models.User).filter(models.User.id == game.player2_id).first().username
     else:
         game.player1_score += 500
+        winner_username = db.query(models.User).filter(models.User.id == game.player1_id).first().username
 
     db.commit()
-    return {"message": "Teslim olundu", "winner": game.player2_id if game.player1_id == user.id else game.player1_id}
+    return {
+        "message": "Teslim olundu",
+        "winner": winner_username,
+        "player1_score": game.player1_score,
+        "player2_score": game.player2_score
+    }
