@@ -48,13 +48,19 @@ class _GameScreenState extends State<GameScreen> {
   String? selectedLetter;
   int? selectedLetterIndex;
   List<PlacedLetter> placedLetters = [];
-
+  Set<String> validWords = {};
+  String currentWord = '';
+  int predictedScore = 0;
+  bool isValid = false;
+  Set<int> usedLetterIndices = {};
+  List<Map<String, dynamic>> currentLetters = []; // <-- Harf listesini global tut
 
   @override
   void initState() {
     super.initState();
     fetchBoard();
     fetchGameInfo();
+    loadValidWords();
   }
 
   @override
@@ -71,9 +77,17 @@ class _GameScreenState extends State<GameScreen> {
     ].contains(type);
   }
 
+  Future<void> loadValidWords() async {
+    final wordsString = await DefaultAssetBundle.of(context).loadString('assets/turkce_kelime_listesi.txt');
+    final lines = wordsString.split('\n');
+    setState(() {
+      validWords = lines.map((e) => e.trim().toUpperCase()).toSet();
+    });
+  }
+
   Future<void> fetchGameInfo() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.102:8001/get_active_games_by_user/${widget.username}'),
+      Uri.parse('http://192.168.1.103:8001/get_active_games_by_user/${widget.username}'),
     );
 
     if (response.statusCode == 200) {
@@ -101,20 +115,46 @@ class _GameScreenState extends State<GameScreen> {
 
   void startCountdownTimer() {
     countdownTimer?.cancel();
-    countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (endTime == null || gameEnded) return;
 
-      final diff = endTime!.difference(DateTime.now());
+      // Güncel oyun bilgilerini tekrar çek
+      final response = await http.get(
+        Uri.parse('http://192.168.1.103:8001/get_active_games_by_user/${widget.username}'),
+      );
 
-      if (diff.isNegative) {
-        timer.cancel();
-        showGameOverDialog("Süre doldu.");
-      } else {
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final List<Map<String, dynamic>> games = List<Map<String, dynamic>>.from(data);
+        final activeGame = games.firstWhereOrNull((game) => game['id'] == widget.gameId);
+
+        if (activeGame == null || activeGame['is_active'] == false) {
+          timer.cancel();
+          showGameOverDialog("Oyun sona erdi.");
+          return;
+        }
+
         setState(() {
+          endTime = DateTime.parse(activeGame['end_time']);
+          player1Score = activeGame['player1_score'];
+          player2Score = activeGame['player2_score'];
+          currentTurn = activeGame['current_turn'];
+          opponent = activeGame['opponent'];
+        });
+
+        fetchBoard();
+
+        final diff = endTime!.difference(DateTime.now());
+        if (diff.isNegative) {
+          timer.cancel();
+          showGameOverDialog("Süre doldu.");
+        } else {
           final m = diff.inMinutes.remainder(60).toString().padLeft(2, '0');
           final s = diff.inSeconds.remainder(60).toString().padLeft(2, '0');
-          timeLeft = "$m:$s";
-        });
+          setState(() {
+            timeLeft = "$m:$s";
+          });
+        }
       }
     });
   }
@@ -122,9 +162,14 @@ class _GameScreenState extends State<GameScreen> {
   Future<void> showGameOverDialog(String message) async {
     gameEnded = true;
     String winner;
-    if (player1Score > player2Score) {
+
+    bool isPlayer1 = currentTurn == 1 && opponent != widget.username;
+
+    if ((isPlayer1 && player1Score > player2Score) ||
+        (!isPlayer1 && player2Score > player1Score)) {
       winner = "${widget.username} kazandı!";
-    } else if (player2Score > player1Score) {
+    } else if ((isPlayer1 && player2Score > player1Score) ||
+        (!isPlayer1 && player1Score > player2Score)) {
       winner = "$opponent kazandı!";
     } else {
       winner = "Berabere!";
@@ -148,7 +193,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> fetchBoard() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.102:8001/start-board/${widget.gameId}'),
+      Uri.parse('http://192.168.1.103:8001/start-board/${widget.gameId}'),
     );
 
     if (response.statusCode == 200) {
@@ -214,9 +259,32 @@ class _GameScreenState extends State<GameScreen> {
               Text('🕒 Kalan: $timeLeft', style: const TextStyle(fontSize: 14)),
             ],
           ),
+          const SizedBox(height: 6),
+          // ✅ Kelime ve doğruluk rengi göstergesi
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              currentWord.isEmpty ? 'Kelime Oluşturun' : currentWord,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: currentWord.isEmpty
+                    ? Colors.black
+                    : (isValid ? Colors.green : Colors.red),
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  void updateCurrentWordAndValidation() {
+
+    if (validWords.isEmpty) return; // Henüz yüklenmemişse boşuna kontrol yapma
+
+    currentWord = placedLetters.map((e) => e.letter).join();
+    isValid = validWords.contains(currentWord.toUpperCase());
   }
 
   Widget _buildBoardGrid() {
@@ -258,13 +326,27 @@ class _GameScreenState extends State<GameScreen> {
 
         return GestureDetector(
           onTap: () {
-            if (selectedLetter != null && letter == null && placed == null) {
-              setState(() {
+            setState(() {
+              if (placed != null) {
+                // Geri alma
+                placedLetters.removeWhere((pl) => pl.row == row && pl.col == col);
+
+                for (int i = 0; i < currentLetters.length; i++) {
+                  if (currentLetters[i]['letter'] == placed.letter && usedLetterIndices.contains(i)) {
+                    usedLetterIndices.remove(i);
+                    break;
+                  }
+                }
+
+                updateCurrentWordAndValidation();
+              } else if (selectedLetter != null && letter == null) {
                 placedLetters.add(PlacedLetter(row: row, col: col, letter: selectedLetter!));
+                usedLetterIndices.add(selectedLetterIndex!);
                 selectedLetter = null;
                 selectedLetterIndex = null;
-              });
-            }
+                updateCurrentWordAndValidation();
+              }
+            });
           },
           child: Container(
             margin: const EdgeInsets.all(1),
@@ -275,7 +357,6 @@ class _GameScreenState extends State<GameScreen> {
       },
     );
   }
-
 
   Widget _buildBottomButtons() {
     return Padding(
@@ -308,7 +389,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> passTurn() async {
     final response = await http.post(
-      Uri.parse('http://192.168.1.102:8001/pass-turn'),
+      Uri.parse('http://192.168.1.103:8001/pass-turn'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'game_id': widget.gameId, 'username': widget.username}),
     );
@@ -326,7 +407,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> surrenderGame() async {
     final response = await http.post(
-      Uri.parse('http://192.168.1.102:8001/surrender'),
+      Uri.parse('http://192.168.1.103:8001/surrender'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'game_id': widget.gameId, 'username': widget.username}),
     );
@@ -342,7 +423,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> submitMove() async {
     final response = await http.post(
-      Uri.parse('http://192.168.1.102:8001/play-move'),
+      Uri.parse('http://192.168.1.103:8001/play-move'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         "game_id": widget.gameId,
@@ -360,7 +441,7 @@ class _GameScreenState extends State<GameScreen> {
         placedLetters.clear();
         selectedLetter = null;
         selectedLetterIndex = null;
-        // -> Harf listesini güncellemek için FutureBuilder tetiklenir
+        usedLetterIndices.clear(); // <-- BUNU EKLE
       });
     } else {
       final error = jsonDecode(response.body);
@@ -370,7 +451,7 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildLetterRack() {
     return FutureBuilder<http.Response>(
-      future: http.get(Uri.parse('http://192.168.1.102:8001/get-letters/${widget.gameId}/${widget.username}')),
+      future: http.get(Uri.parse('http://192.168.1.103:8001/get-letters/${widget.gameId}/${widget.username}')),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const SizedBox(height: 60, child: Center(child: CircularProgressIndicator()));
@@ -386,6 +467,8 @@ class _GameScreenState extends State<GameScreen> {
         final decoded = jsonDecode(snapshot.data!.body);
         final letters = List<Map<String, dynamic>>.from(decoded['letters']);
 
+        currentLetters = letters; // <<< GLOBAL değişkene atandı
+
         return Container(
           color: Colors.orange.shade100,
           padding: const EdgeInsets.all(8),
@@ -398,10 +481,12 @@ class _GameScreenState extends State<GameScreen> {
 
                 return GestureDetector(
                   onTap: () {
-                    setState(() {
-                      selectedLetter = tile['letter'];
-                      selectedLetterIndex = index;
-                    });
+                    if (!usedLetterIndices.contains(index)) {
+                      setState(() {
+                        selectedLetter = tile['letter'];
+                        selectedLetterIndex = index;
+                      });
+                    }
                   },
                   child: Container(
                     width: 40,

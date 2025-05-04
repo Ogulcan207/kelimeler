@@ -12,8 +12,18 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Kelime Mayınları',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(primarySwatch: Colors.deepPurple),
+      theme: ThemeData(
+        fontFamily: 'Poppins',
+        snackBarTheme: const SnackBarThemeData(
+          contentTextStyle: TextStyle(fontFamily: 'Poppins'),
+        ),
+        dialogTheme: const DialogTheme(
+          contentTextStyle: TextStyle(fontFamily: 'Poppins'),
+        ),
+        appBarTheme: const AppBarTheme(
+          titleTextStyle: TextStyle(fontFamily: 'Poppins', fontSize: 20, color: Colors.white),
+        ),
+      ),
       home: const LoginPage(),
     );
   }
@@ -35,7 +45,7 @@ class _LoginPageState extends State<LoginPage> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://192.168.1.102:8001/login'),
+        Uri.parse('http://192.168.1.103:8001/login'),
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: {
           'username': _usernameController.text,

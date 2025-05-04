@@ -6,7 +6,12 @@ from typing import List
 from datetime import datetime, timedelta
 from backend.crud import initialize_letter_pool, deal_letters_to_players
 import random
+from pytz import timezone
+from fastapi.responses import JSONResponse
+TR_TIMEZONE = timezone('Europe/Istanbul')
+
 models.Base.metadata.create_all(bind=engine)
+
 print("💡 FastAPI başlatılıyor...")
 
 app = FastAPI()
@@ -48,25 +53,8 @@ def start_game(
 ):
     result = crud.match_or_create_game(db, username, mode)
 
-    # Eşleşme sağlandıysa süreyi ayarla
     if result:
-        game = db.query(models.Game).filter(models.Game.id == result.id).first()
-
-        if mode == "2_min":
-            duration = timedelta(minutes=2)
-        elif mode == "5_min":
-            duration = timedelta(minutes=5)
-        elif mode == "12_hour":
-            duration = timedelta(hours=12)
-        elif mode == "24_hour":
-            duration = timedelta(hours=24)
-        else:
-            raise HTTPException(status_code=400, detail="Geçersiz oyun modu")
-
-        game.end_time = datetime.utcnow() + duration
-        db.commit()
-
-        return {"message": "Oyun başlatıldı", "game_id": game.id}
+        return {"message": "Oyun başlatıldı", "game_id": result.id}
     else:
         return {"message": "Bekleniyor", "waiting": True}
 
@@ -84,17 +72,17 @@ def check_match(username: str, mode: str, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
 
-    # Kullanıcının aktif oyunu var mı kontrol et
     active_game = db.query(models.Game).filter(
         ((models.Game.player1_id == user.id) | (models.Game.player2_id == user.id)) &
         (models.Game.mode == mode) &
-        (models.Game.player1_score == 0)  # Başlamış ama henüz skor alınmamış gibi kontrol
-    ).first()
+        (models.Game.is_active == True)
+    ).order_by(models.Game.start_time.desc()).first()  # En güncel oyunu getir
 
     if active_game:
         return {"game_id": active_game.id}
 
     return {"game_id": None}
+
 
 @app.get("/all-pending-games")
 def all_pending_games(db: Session = Depends(get_db)):
@@ -157,8 +145,8 @@ def join_pending_game(
         player1_id=player1.id,
         player2_id=player2.id,
         mode=pending.mode,
-        start_time=datetime.utcnow(),
-        end_time=datetime.utcnow() + duration,
+        start_time=datetime.now(TR_TIMEZONE),
+        end_time=datetime.now(TR_TIMEZONE) + duration,
         current_turn=starting_turn,
         is_active=True,
         is_completed=False,
@@ -180,7 +168,8 @@ def join_pending_game(
         "game_id": new_game.id,
         "starting_turn": starting_turn,
         "player1": player1.username,
-        "player2": player2.username
+        "player2": player2.username,
+        "mode": new_game.mode
     }
 
 @app.get("/grid/{game_id}")
@@ -242,8 +231,15 @@ def get_win_stats(username: str, db: Session = Depends(get_db)):
 
 @app.get("/get-letters/{game_id}/{username}")
 def get_player_letters(game_id: int, username: str, db: Session = Depends(get_db)):
-    letters = db.query(models.PlayerLetters).filter_by(game_id=game_id, username=username).all()
-    return {"letters": [{"letter": l.letter, "point": l.point} for l in letters]}
+    letters = db.query(models.PlayerLetters).filter_by(
+        game_id=game_id,
+        username=username,
+        used=False  # 🔥 Sadece eldeki harfler
+    ).all()
+    return JSONResponse(
+        content={"letters": [{"letter": l.letter, "point": l.point} for l in letters]},
+        media_type="application/json; charset=utf-8"
+    )
 
 @app.post("/play-move")
 def play_move(move: schemas.PlayMove, db: Session = Depends(get_db)):

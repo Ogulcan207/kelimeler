@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import 'game_screen.dart';
+
 class PendingGamesPage extends StatefulWidget {
   final String username;
 
@@ -22,7 +24,7 @@ class _PendingGamesPageState extends State<PendingGamesPage> {
 
   Future<void> fetchPendingGames() async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.102:8001/all-pending-games'),
+      Uri.parse('http://192.168.1.103:8001/all-pending-games'),
     );
 
     if (response.statusCode == 200) {
@@ -38,13 +40,27 @@ class _PendingGamesPageState extends State<PendingGamesPage> {
 
   Future<void> joinPendingGame(int pendingId) async {
     final response = await http.post(
-      Uri.parse('http://192.168.1.102:8001/join-pending-game'),
+      Uri.parse('http://192.168.1.103:8001/join-pending-game'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'pending_id': pendingId, 'username': widget.username}),
     );
 
     if (response.statusCode == 200) {
-      Navigator.pop(context); // Başarılı olunca geri dön
+      final json = jsonDecode(response.body);
+      final gameId = json['game_id'];
+      final mode = json['mode'];  // sunucudan dönmesini sağla
+
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => GameScreen(
+            gameId: gameId,
+            mode: mode,
+            username: widget.username,
+          ),
+        ),
+      );
     } else {
       final json = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(

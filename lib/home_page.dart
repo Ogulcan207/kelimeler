@@ -28,7 +28,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> startGame(BuildContext context, String mode) async {
     final response = await http.post(
-      Uri.parse('http://192.168.1.102:8001/start-game'),
+      Uri.parse('http://192.168.1.103:8001/start-game'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'username': widget.username,
@@ -74,7 +74,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _checkMyPendingGame(BuildContext context) async {
     final response = await http.get(
-      Uri.parse('http://192.168.1.102:8001/my-pending-game/${widget.username}'),
+      Uri.parse('http://192.168.1.103:8001/my-pending-game/${widget.username}'),
     );
 
     if (response.statusCode == 200) {
@@ -165,7 +165,7 @@ class _HomePageState extends State<HomePage> {
                       Text("📧 E-posta: ${widget.email}", style: const TextStyle(fontSize: 16)),
                       const SizedBox(height: 8),
                       FutureBuilder<http.Response>(
-                        future: http.get(Uri.parse('http://192.168.1.102:8001/win-stats/${widget.username}')),
+                        future: http.get(Uri.parse('http://192.168.1.103:8001/win-stats/${widget.username}')),
                         builder: (context, snapshot) {
                           if (snapshot.connectionState != ConnectionState.done) {
                             return const Text("🎯 Başarı Yüzdesi: %...", style: TextStyle(fontSize: 16));

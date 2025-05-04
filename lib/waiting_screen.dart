@@ -28,7 +28,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
     while (!_isMatched && !_isCancelling) {
       await Future.delayed(const Duration(seconds: 5));
       final response = await http.get(
-        Uri.parse('http://192.168.1.102:8001/check-match?username=${widget.username}&mode=${widget.mode}'),
+        Uri.parse('http://192.168.1.103:8001/check-match?username=${widget.username}&mode=${widget.mode}'),
       );
 
       if (response.statusCode == 200) {
@@ -59,7 +59,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
     });
 
     final response = await http.delete(
-      Uri.parse('http://192.168.1.102:8001/cancel-pending?username=${widget.username}'), // burada düzeltildi
+      Uri.parse('http://192.168.1.103:8001/cancel-pending?username=${widget.username}'), // burada düzeltildi
     );
 
     if (response.statusCode == 200) {

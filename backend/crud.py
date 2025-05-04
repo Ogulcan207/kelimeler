@@ -2,12 +2,15 @@ from sqlalchemy.orm import Session
 from backend import models, schemas
 import hashlib, random,string
 from .models import Game, GameMode, PlayerLetters
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import HTTPException
 from sqlalchemy import text
 from backend.constants import LETTER_POOL
 from typing import List
 from collections import Counter
+from pytz import timezone
+
+TR_TIMEZONE = timezone('Europe/Istanbul')
 
 def get_user_by_username(db: Session, username: str):
     return db.query(models.User).filter(models.User.username == username).first()
@@ -111,18 +114,29 @@ def get_completed_games_by_user(db: Session, username: str):
         })
     return result
 
+def get_duration_by_mode(mode: str) -> timedelta:
+    if mode == "fast_2_min":
+        return timedelta(minutes=2)
+    elif mode == "fast_5_min":
+        return timedelta(minutes=5)
+    elif mode == "extended_12_hour":
+        return timedelta(hours=12)
+    elif mode == "extended_24_hour":
+        return timedelta(hours=24)
+    else:
+        return timedelta(minutes=2)  # fallback
+
 def match_or_create_game(db: Session, username: str, mode: str):
     pending_match = db.query(models.PendingMatch).filter(models.PendingMatch.mode == mode).first()
 
     if pending_match and pending_match.username != username:
-        # Eşleştir ve yeni oyun oluştur
+        # Eşleştirme yapıldıysa burada oyun başlat
         player1 = get_user_by_username(db, pending_match.username)
         player2 = get_user_by_username(db, username)
 
         if not player1 or not player2:
             raise HTTPException(status_code=404, detail="Oyuncu bulunamadı")
 
-        # Pending eşleşmeyi sil
         db.delete(pending_match)
         db.commit()
 
@@ -130,16 +144,25 @@ def match_or_create_game(db: Session, username: str, mode: str):
             player1_id=player1.id,
             player2_id=player2.id,
             mode=mode,
-            start_time=datetime.utcnow(),
-            current_turn=1
+            start_time=datetime.now(TR_TIMEZONE),  # süre burada başlasın
+            end_time=datetime.now(TR_TIMEZONE) + get_duration_by_mode(mode),
+            current_turn=random.choice([1, 2]),
+            is_active=True,
+            is_completed=False
         )
+
         db.add(new_game)
         db.commit()
         db.refresh(new_game)
-        return new_game
 
+        # Grid ve harfler oluşturulsun
+        create_game_grid(db, new_game.id)
+        initialize_letter_pool(db, new_game.id)
+        deal_letters_to_players(db, new_game.id, [player1.id, player2.id])
+
+        return new_game
     else:
-        # Bekleyen yoksa yeni pending match oluştur
+        # Pending yoksa sadece beklemeye al
         pending = models.PendingMatch(username=username, mode=mode)
         db.add(pending)
         db.commit()
@@ -150,7 +173,7 @@ def get_active_games_by_user(db: Session, username: str):
     if not user:
         return []
 
-    now = datetime.utcnow()
+    now = datetime.now(TR_TIMEZONE)
 
     # Önce oyunların sürelerini kontrol edip is_active alanlarını güncelle
     games = db.query(models.Game).filter(
@@ -159,10 +182,16 @@ def get_active_games_by_user(db: Session, username: str):
     ).all()
 
     for game in games:
-        if game.end_time and now > game.end_time:
-            game.is_active = False
-            game.is_completed = True
+        if game.end_time:
+            # game.end_time aware değilse, timezone ekle
+            if game.end_time.tzinfo is None:
+                game_end_time = TR_TIMEZONE.localize(game.end_time)
+            else:
+                game_end_time = game.end_time
 
+            if now > game_end_time:
+                game.is_active = False
+                game.is_completed = True
     db.commit()
 
     # Güncel aktif oyunları tekrar çek
@@ -189,7 +218,7 @@ def get_active_games_by_user(db: Session, username: str):
     return result
 
 def load_turkish_words():
-    with open("assets/turkce_kelimeler.txt", "r", encoding="utf-8") as f:
+    with open("assets/turkce_kelime_listesi.txt", "r", encoding="utf-8") as f:
         return set(word.strip().upper() for word in f)
     
 VALID_WORDS = load_turkish_words()
@@ -283,7 +312,6 @@ def deal_letters_to_players(db: Session, game_id: int, player_ids: List[int]):
             ))
     db.commit()
 
-
 def distribute_letters(db: Session, game_id: int, player_usernames: list[str]):
     # Havuzdan rastgele 14 harf çek
     pool = []
@@ -329,10 +357,11 @@ def draw_new_letters(db: Session, game_id: int, username: str, count: int):
             point=next((p for l, (c, p) in LETTER_POOL.items() if l == chosen.letter), 1),
             used=False
         ))
-        db.commit()  # Her harften sonra güncelle
+        # pool'u güncelle
+        if chosen.remaining_count == 0:
+            pool_letters.remove(chosen)
 
-        # Yeniden çekmek için filtrele
-        pool_letters = [p for p in pool_letters if p.remaining_count > 0]
+    db.commit()
 
 def play_move_logic(db: Session, move: schemas.PlayMove):
 
@@ -342,20 +371,26 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
     if not game or not user:
         raise HTTPException(status_code=404, detail="Oyun veya kullanıcı bulunamadı")
 
-    # Süre kontrolü
-    if game.end_time and datetime.utcnow() > game.end_time:
-        game.is_active = False
-        game.is_completed = True
-        db.commit()
+    if game.end_time:
 
-        if game.player1_score > game.player2_score:
-            winner = game.player1.username
-        elif game.player2_score > game.player1_score:
-            winner = game.player2.username
+        if game.end_time.tzinfo is None:
+            game_end = TR_TIMEZONE.localize(game.end_time)
         else:
-            winner = "Berabere"
+            game_end = game.end_time
+        # Süre kontrolü
+        if datetime.now(TR_TIMEZONE) > game_end:
+            game.is_active = False
+            game.is_completed = True
+            db.commit()
 
-        raise HTTPException(status_code=400, detail=f"Oyun süresi doldu. Kazanan: {winner}")
+            if game.player1_score > game.player2_score:
+                winner = game.player1.username
+            elif game.player2_score > game.player1_score:
+                winner = game.player2.username
+            else:
+                winner = "Berabere"
+
+            raise HTTPException(status_code=400, detail=f"Oyun süresi doldu. Kazanan: {winner}")
 
     # Sıra kontrolü
     if (game.current_turn == 1 and game.player1_id != user.id) or \
@@ -377,19 +412,42 @@ def play_move_logic(db: Session, move: schemas.PlayMove):
         if inventory_count[letter] < required:
             raise HTTPException(status_code=400, detail=f"'{letter}' harfinden yeterli yok")
 
-    # Mayın kontrolü
-    score = 0
-    hit_mine = None
-    for pos, char in zip(move.positions, word):
-        cell = db.query(models.GameGrid).filter_by(
-            game_id=move.game_id, row=pos.row, col=pos.col
-        ).first()
-        if cell:
-            cell.letter = char
+        score = 0
+        hit_mine = None
+        word_multiplier = 1
+
+        for pos, char in zip(move.positions, word):
+            cell = db.query(models.GameGrid).filter_by(
+                game_id=move.game_id, row=pos.row, col=pos.col
+            ).first()
+
+            if not cell:
+                continue
+
+            cell.letter = char  # Tahtaya harfi işle
+
+            # Mayın kontrolü
             if cell.special_type in ['puan_bolunmesi', 'puan_transferi', 'harf_kaybi',
-                                     'ekstra_hamle_engeli', 'kelime_iptali']:
+                                    'ekstra_hamle_engeli', 'kelime_iptali']:
                 hit_mine = cell.special_type
-        score += next((p for l, (c, p) in LETTER_POOL.items() if l == char), 1)
+
+            base_point = next((p for l, (c, p) in LETTER_POOL.items() if l == char), 1)
+
+            # Özel hücre kontrolü
+            if cell.special_type == 'h2':
+                score += base_point * 2
+            elif cell.special_type == 'h3':
+                score += base_point * 3
+            else:
+                score += base_point
+
+            if cell.special_type == 'k2':
+                word_multiplier *= 2
+            elif cell.special_type == 'k3':
+                word_multiplier *= 3
+
+        score *= word_multiplier
+
 
     # Mayına göre puan ayarla
     if hit_mine == "puan_bolunmesi":
